@@ -10708,7 +10708,9 @@ export default function Dashboard() {
       (v.studentId === studentInfo.uid || (v.tokenCode === tokenData.code && v.studentName === studentInfo.name))
     );
 
-    const detailUsedTimeMs = myDetail?.reEnteredAt
+    const detailUsedTimeMs = myDetail?.violatedAt
+      ? new Date(myDetail.violatedAt).getTime()
+      : myDetail?.reEnteredAt
       ? new Date(myDetail.reEnteredAt).getTime()
       : myDetail?.timestamp
       ? new Date(myDetail.timestamp).getTime()
@@ -10720,16 +10722,16 @@ export default function Dashboard() {
     const isReactivatedByTokenOrViolation =
       !studentActiveViolation && (
         (Boolean(myDetail?.isReset) && !(tokenData.usedBy || []).includes(studentInfo.uid)) ||
-        (Boolean(latestResetViolation) && (violResetTimeMs >= detailUsedTimeMs || myDetail?.status === 'violation' || !(tokenData.usedBy || []).includes(studentInfo.uid)))
+        (Boolean(latestResetViolation) && violResetTimeMs > detailUsedTimeMs)
       );
 
     let computedStatus: 'used_finished' | 'used_working' | 'locked_violation' | 'reactivated' = 'used_working';
-    if (overrideStatus) {
+    if (studentActiveViolation || (myDetail?.status === 'violation' && !myDetail?.isReset)) {
+      computedStatus = 'locked_violation';
+    } else if (overrideStatus) {
       computedStatus = overrideStatus;
     } else if (isReactivatedByTokenOrViolation) {
       computedStatus = 'reactivated';
-    } else if (studentActiveViolation || (myDetail?.status === 'violation' && !myDetail?.isReset)) {
-      computedStatus = 'locked_violation';
     } else if (myDetail?.status === 'finished') {
       computedStatus = 'used_finished';
     } else {
@@ -11034,19 +11036,21 @@ export default function Dashboard() {
         let activeDetailEntry = myDetailEntry && !myDetailEntry.isReset ? myDetailEntry : null;
         let isLockedByUsedArray = usedBy.includes(studentUid);
 
-        // Check if violation was already reset more recently than the student's previous entry on this token
+        // Check if violation was already reset more recently than the student's previous entry/violation on this token
         const checkReactivatedByViolationReset = (violList: any[], detailEntry: any) => {
           const resetViols = violList.filter((v: any) => v.isReset && isMatchStudentViolation(v));
           if (resetViols.length === 0) return false;
           const latestResetMs = Math.max(
-            ...resetViols.map((v: any) => (v.resetAt ? new Date(v.resetAt).getTime() : Date.now()))
+            ...resetViols.map((v: any) => (v.resetAt ? new Date(v.resetAt).getTime() : 0))
           );
-          const lastUsedMs = detailEntry?.reEnteredAt
+          const detailViolatedOrUsedMs = detailEntry?.violatedAt
+            ? new Date(detailEntry.violatedAt).getTime()
+            : detailEntry?.reEnteredAt
             ? new Date(detailEntry.reEnteredAt).getTime()
             : detailEntry?.timestamp
             ? new Date(detailEntry.timestamp).getTime()
             : 0;
-          return latestResetMs >= lastUsedMs || detailEntry?.status === 'violation';
+          return latestResetMs > detailViolatedOrUsedMs;
         };
 
         if (!freshUnresetViolation && checkReactivatedByViolationReset(currentViolationsList, myDetailEntry)) {
@@ -11903,69 +11907,76 @@ export default function Dashboard() {
               'error'
             );
 
-            // 2. Mark status as 'violation' in token's usedByDetails locally & in Firestore
-            if (finishedExam?.tokenId) {
-              setStudentTokens(prev => {
-                const next = prev.map(t =>
-                  t.id === finishedExam.tokenId
-                    ? {
-                        ...t,
-                        usedByDetails: (t.usedByDetails || []).map((d: any) =>
-                          d.uid === targetUid
-                            ? {
-                                ...d,
-                                status: 'violation',
-                                lastViolationType: violationType || 'Pelanggaran Aturan Ujian',
-                                violatedAt: violatedAtIso,
-                                isReset: false
-                              }
-                            : d
-                        )
-                      }
-                    : t
+            // 2. Mark status as 'violation' and add to usedBy in tokens locally & in Firestore
+            if (finishedExam?.tokenId || finishedExam?.tokenCode) {
+              const matchesTargetToken = (t: any) =>
+                t.id === finishedExam.tokenId ||
+                (finishedExam.tokenCode && String(t.code || '').toUpperCase() === String(finishedExam.tokenCode).toUpperCase());
+
+              const applyViolationToToken = (t: any) => {
+                const nextUsedBy = Array.from(new Set([...(t.usedBy || []), targetUid]));
+                const existingIdx = (t.usedByDetails || []).findIndex(
+                  (d: any) => d.uid === targetUid || (d.name && targetName && d.name.toLowerCase().trim() === targetName.toLowerCase().trim())
                 );
+                const violDetail = {
+                  uid: targetUid,
+                  name: targetName,
+                  status: 'violation',
+                  lastViolationType: violationType || 'Pelanggaran Aturan Ujian',
+                  violatedAt: violatedAtIso,
+                  isReset: false
+                };
+                const nextDetails = existingIdx >= 0
+                  ? (t.usedByDetails || []).map((d: any, idx: number) => idx === existingIdx ? { ...d, ...violDetail } : d)
+                  : [...(t.usedByDetails || []), violDetail];
+                return { ...t, usedBy: nextUsedBy, usedByDetails: nextDetails };
+              };
+
+              setStudentTokens(prev => {
+                const next = prev.map(t => matchesTargetToken(t) ? applyViolationToToken(t) : t);
                 try { localStorage.setItem('cached_dashboard_studentTokens', JSON.stringify(next)); } catch (e) {}
                 return next;
               });
-              setTokens(prev =>
-                prev.map(t =>
-                  t.id === finishedExam.tokenId
-                    ? {
-                        ...t,
-                        usedByDetails: (t.usedByDetails || []).map((d: any) =>
-                          d.uid === targetUid
-                            ? {
-                                ...d,
-                                status: 'violation',
-                                lastViolationType: violationType || 'Pelanggaran Aturan Ujian',
-                                violatedAt: violatedAtIso,
-                                isReset: false
-                              }
-                            : d
-                        )
-                      }
-                    : t
-                )
-              );
 
-              if (!String(finishedExam.tokenId).startsWith('local_') && !String(finishedExam.tokenId).startsWith('bundle_')) {
+              setTokens(prev => {
+                const next = prev.map(t => matchesTargetToken(t) ? applyViolationToToken(t) : t);
+                try { localStorage.setItem('cached_dashboard_tokens', JSON.stringify(next)); } catch (e) {}
+                return next;
+              });
+
+              try {
+                const rawShared = localStorage.getItem('shared_released_tokens_registry');
+                if (rawShared) {
+                  const parsed = JSON.parse(rawShared);
+                  if (Array.isArray(parsed)) {
+                    const updatedShared = parsed.map((t: any) => matchesTargetToken(t) ? applyViolationToToken(t) : t);
+                    localStorage.setItem('shared_released_tokens_registry', JSON.stringify(updatedShared));
+                  }
+                }
+              } catch (e) {}
+
+              if (finishedExam?.tokenId && !String(finishedExam.tokenId).startsWith('local_') && !String(finishedExam.tokenId).startsWith('bundle_') && !String(finishedExam.tokenId).startsWith('smart_')) {
                 try {
                   const tokenRef = doc(db, 'tokens', finishedExam.tokenId);
                   const tokenSnap = await getDoc(tokenRef);
                   if (tokenSnap.exists()) {
                     const tData = tokenSnap.data();
-                    const updatedDetails = (tData.usedByDetails || []).map((d: any) =>
-                      d.uid === targetUid
-                        ? {
-                            ...d,
-                            status: 'violation',
-                            lastViolationType: violationType || 'Pelanggaran Aturan Ujian',
-                            violatedAt: violatedAtIso,
-                            isReset: false
-                          }
-                        : d
+                    const nextUsedBy = Array.from(new Set([...(tData.usedBy || []), targetUid]));
+                    const existingIdx = (tData.usedByDetails || []).findIndex(
+                      (d: any) => d.uid === targetUid || (d.name && targetName && d.name.toLowerCase().trim() === targetName.toLowerCase().trim())
                     );
-                    await updateDoc(tokenRef, { usedByDetails: updatedDetails });
+                    const violDetail = {
+                      uid: targetUid,
+                      name: targetName,
+                      status: 'violation',
+                      lastViolationType: violationType || 'Pelanggaran Aturan Ujian',
+                      violatedAt: violatedAtIso,
+                      isReset: false
+                    };
+                    const updatedDetails = existingIdx >= 0
+                      ? (tData.usedByDetails || []).map((d: any, idx: number) => idx === existingIdx ? { ...d, ...violDetail } : d)
+                      : [...(tData.usedByDetails || []), violDetail];
+                    await updateDoc(tokenRef, { usedBy: nextUsedBy, usedByDetails: updatedDetails });
                   }
                 } catch (e) {}
               }
@@ -13351,12 +13362,32 @@ export default function Dashboard() {
                         />
                         {(() => {
                           const clean = tokenInput.trim().toUpperCase();
+                          const myUid = rolePreviewMode === 'siswa' ? effectiveStudentUid : (user?.uid || userProfile?.uid || userProfile?.id || auth.currentUser?.uid || 'siswa');
+                          const myName = rolePreviewMode === 'siswa' ? effectiveStudentName : (userProfile?.username || userProfile?.name || user?.displayName || 'Siswa');
+
                           if (clean.length >= 5) {
                             const matchedLocal =
                               tokens.find((t: any) => String(t.code || '').toUpperCase() === clean) ||
                               studentTokens.find((t: any) => String(t.code || '').toUpperCase() === clean);
                             const matchedSmart = verifySmartExamTokenOffline(clean, exams);
+                            const matchedExamId = matchedLocal?.examId || matchedSmart?.id;
                             const matchedExamTitle = matchedLocal?.examTitle || matchedSmart?.title;
+
+                            const activeViol = violations.find((v: any) =>
+                              !v.isReset &&
+                              (v.examId === matchedExamId || (v.tokenCode && String(v.tokenCode).toUpperCase() === clean)) &&
+                              (v.studentId === myUid || (v.studentName && myName && v.studentName.toLowerCase().trim() === myName.toLowerCase().trim()))
+                            );
+
+                            if (activeViol) {
+                              return (
+                                <p className="mt-1.5 text-xs text-center text-red-200 font-extrabold flex items-center justify-center gap-1.5 bg-red-950/60 p-2 rounded-xl border border-red-400/40">
+                                  <AlertTriangle size={15} className="text-red-300 shrink-0" />
+                                  <span>Token Terkunci: Anda memiliki catatan pelanggaran aktif ({activeViol.type || 'Pindah Layar'}). Lapor ke Pengawas Ruang!</span>
+                                </p>
+                              );
+                            }
+
                             if (matchedExamTitle) {
                               return (
                                 <p className="mt-1.5 text-xs text-center text-emerald-200 font-extrabold flex items-center justify-center gap-1.5">
@@ -13417,6 +13448,7 @@ export default function Dashboard() {
                     {/* Token Aktif Ruang yang Terdeteksi Otomatis (Klik 1x untuk Pakai) */}
                     {(() => {
                       const myUid = rolePreviewMode === 'siswa' ? effectiveStudentUid : (user?.uid || userProfile?.uid || userProfile?.id || auth.currentUser?.uid || 'siswa');
+                      const myName = rolePreviewMode === 'siswa' ? effectiveStudentName : (userProfile?.username || userProfile?.name || user?.displayName || 'Siswa');
                       const myClass = rolePreviewMode === 'siswa' ? (effectiveStudentClass || '7A') : (userProfile?.kelas || '');
                       const myGrade = getGradeLevelFromClass(myClass);
                       const nowMs = Date.now();
@@ -13431,10 +13463,29 @@ export default function Dashboard() {
                           ? new Date(t.expiresAt).getTime()
                           : nowMs + 3600000;
                         if (expMs < nowMs) return false;
-                        const alreadyUsedByMe =
-                          (t.usedBy || []).includes(myUid) ||
-                          studentTokens.some((st: any) => st.code === t.code && (st.usedBy || []).includes(myUid));
-                        if (alreadyUsedByMe) return false;
+
+                        // 1. MUTLAK: JANGAN TAMPILKAN JIKA SISWA MEMILIKI PELANGGARAN AKTIF PADA UJIAN INI
+                        const hasActiveViolationForExam = violations.some((v: any) =>
+                          !v.isReset &&
+                          (v.examId === t.examId || (v.tokenCode && String(v.tokenCode).toUpperCase() === String(t.code).toUpperCase())) &&
+                          (v.studentId === myUid || (v.studentName && myName && v.studentName.toLowerCase().trim() === myName.toLowerCase().trim()))
+                        );
+                        if (hasActiveViolationForExam) return false;
+
+                        // 2. MUTLAK: JANGAN TAMPILKAN JIKA SISWA SUDAH PERNAH MEMAKAI TOKEN INI & BELUM DI-RESET
+                        const isUsedInArray = (t.usedBy || []).includes(myUid);
+                        const detailInToken = (t.usedByDetails || []).find((d: any) =>
+                          d.uid === myUid || (d.name && myName && d.name.toLowerCase().trim() === myName.toLowerCase().trim())
+                        );
+                        const isDetailLocked = detailInToken && !detailInToken.isReset;
+                        const isUsedInStudentTokens = studentTokens.some((st: any) =>
+                          st.code === t.code && (
+                            (st.usedBy || []).includes(myUid) ||
+                            (st.usedByDetails || []).some((d: any) => (d.uid === myUid || (d.name && myName && d.name.toLowerCase().trim() === myName.toLowerCase().trim())) && !d.isReset)
+                          )
+                        );
+                        if (isUsedInArray || isDetailLocked || isUsedInStudentTokens) return false;
+
                         const exObj = exams.find(e => e.id === t.examId);
                         if (exObj && (exObj.isArchived || exObj.adminLocked)) return false;
                         if (exObj && myGrade) {
