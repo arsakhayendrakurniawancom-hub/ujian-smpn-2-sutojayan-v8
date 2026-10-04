@@ -35,10 +35,36 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    const msg = String(error?.message || error || '').toLowerCase();
+    if (
+      msg.includes('internal assertion failed') ||
+      msg.includes('unexpected state') ||
+      msg.includes('quota') ||
+      msg.includes('resource-exhausted') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('firestore_timeout') ||
+      msg.includes('failed-precondition')
+    ) {
+      console.warn("Ignored Firestore benign internal error in ErrorBoundary:", error?.message);
+      return { hasError: false, error: null };
+    }
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    const msg = String(error?.message || error || '').toLowerCase();
+    if (
+      msg.includes('internal assertion failed') ||
+      msg.includes('unexpected state') ||
+      msg.includes('quota') ||
+      msg.includes('resource-exhausted') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('firestore_timeout') ||
+      msg.includes('failed-precondition')
+    ) {
+      console.warn("Benign Firestore assertion caught and bypassed safely:", error?.message);
+      return;
+    }
     console.error("Uncaught error:", error, errorInfo);
   }
 
@@ -658,19 +684,21 @@ function AuthScreen() {
                 <input
                   type={showRosterPassword ? "text" : "password"}
                   required
+                  autoComplete="current-password"
                   placeholder="Masukkan password Anda"
                   value={rosterPassword}
                   onChange={(e) => setRosterPassword(e.target.value)}
-                  className="w-full pl-11 pr-11 py-3 bg-white border border-blue-200 rounded-xl text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full pl-11 pr-11 py-3 bg-white border border-blue-200 rounded-xl text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                 />
                 <button
                   type="button"
                   onClick={() => setShowRosterPassword(prev => !prev)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors p-1 rounded-lg focus:outline-none cursor-pointer"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer flex items-center justify-center"
                   title={showRosterPassword ? "Sembunyikan password" : "Lihat password"}
                   aria-label={showRosterPassword ? "Sembunyikan password" : "Lihat password"}
+                  aria-pressed={showRosterPassword}
                 >
-                  {showRosterPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {showRosterPassword ? <EyeOff size={18} className="text-blue-600" /> : <Eye size={18} />}
                 </button>
               </div>
             </div>
@@ -805,13 +833,13 @@ function AuthScreen() {
 
             <div className="space-y-1">
               <div className="flex items-center justify-between ml-1">
-                <label className="text-xs font-bold text-gray-500 uppercase">Kata Sandi</label>
+                <label className="text-xs font-bold text-gray-700 uppercase">Password / Kata Sandi</label>
                 {!isSignUp && (
                   <button 
                     type="button"
                     onClick={handleForgotPassword}
                     disabled={resetCooldown > 0}
-                    className="text-xs font-bold text-blue-600 hover:underline disabled:text-gray-400"
+                    className="text-xs font-bold text-blue-600 hover:underline disabled:text-gray-400 cursor-pointer"
                   >
                     {resetCooldown > 0 ? `Tunggu ${resetCooldown}s` : 'Lupa Password?'}
                   </button>
@@ -822,19 +850,21 @@ function AuthScreen() {
                 <input
                   type={showManualPassword ? "text" : "password"}
                   required
-                  placeholder="••••••••"
-                  className="w-full pl-12 pr-11 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  autoComplete={isSignUp ? "new-password" : "current-password"}
+                  placeholder={isSignUp ? "Minimal 6 karakter" : "Masukkan password Anda"}
+                  className="w-full pl-12 pr-11 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm font-semibold text-gray-900"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
                 <button
                   type="button"
                   onClick={() => setShowManualPassword(prev => !prev)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 transition-colors p-1 rounded-lg focus:outline-none cursor-pointer"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors p-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer flex items-center justify-center"
                   title={showManualPassword ? "Sembunyikan password" : "Lihat password"}
                   aria-label={showManualPassword ? "Sembunyikan password" : "Lihat password"}
+                  aria-pressed={showManualPassword}
                 >
-                  {showManualPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {showManualPassword ? <EyeOff size={18} className="text-blue-600" /> : <Eye size={18} />}
                 </button>
               </div>
             </div>

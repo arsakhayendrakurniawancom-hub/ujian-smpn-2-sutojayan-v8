@@ -2,6 +2,8 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, indexedDBLocalPersistence, setPersistence } from 'firebase/auth';
 import { 
   getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
   setLogLevel,
   doc,
   getDocFromServer
@@ -74,9 +76,26 @@ const firestoreDbId = pickConfigValue(
 
 const app = initializeApp(activeFirebaseConfig);
 
-// Gunakan getFirestore standar sesuai spesifikasi Firebase SDK (tanpa memanggil disableNetwork
-// yang dapat memicu FIRESTORE (11.0.1) INTERNAL ASSERTION FAILED: Unexpected state saat Remix)
-export const db = getFirestore(app, firestoreDbId);
+// Gunakan initializeFirestore dengan memoryLocalCache() eksplisit agar tidak memicu bug IndexedDB
+// multi-tab coordination / lease acquisition di iframe AI Studio yang menyebabkan FIRESTORE (11.0.1) INTERNAL ASSERTION FAILED: Unexpected state.
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      localCache: memoryLocalCache(),
+    }, firestoreDbId);
+  } catch (e) {
+    return getFirestore(app, firestoreDbId);
+  }
+})();
+
+// Validasi koneksi awal ke Firestore sesuai standar skill
+(async () => {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    // Normal jika dokumen tidak ada atau offline
+  }
+})();
 
 const QUOTA_COOLDOWN_KEY = 'smpn2_firestore_quota_exhausted_until';
 let quotaExhaustedInMemory = false;

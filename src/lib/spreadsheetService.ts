@@ -511,7 +511,15 @@ export const sanitizeAppSettingsWithDefaults = (raw?: any) => {
         ? Math.min(120, Math.round(bSettings.exitCountdownSeconds))
         : 10,
     attendanceAbsenceNotes: bSettings.attendanceAbsenceNotes || {},
-    customPortalConfig: bSettings.customPortalConfig || undefined,
+    customPortalConfig: bSettings.customPortalConfig || {
+      menuTitle: 'Hasil Ujian / Nilai',
+      menuSubtitle: 'Daftar Nilai Hasil Ujian & Pengumuman Resmi Sekolah',
+      enabledForSupervisor: true,
+      enabledForStudent: true,
+      enableStartupPopup: true,
+      popupFrequency: 'every_open',
+      items: [],
+    },
     supervisorMenus: {
       schedule: bSettings.supervisorMenus?.schedule !== false,
       exams: bSettings.supervisorMenus?.exams !== false,
@@ -601,7 +609,17 @@ export const sanitizeAppSettingsWithDefaults = (raw?: any) => {
         ? Math.min(120, Math.round(Number(raw.exitCountdownSeconds)))
         : baseDefaults.exitCountdownSeconds,
     attendanceAbsenceNotes: raw.attendanceAbsenceNotes || baseDefaults.attendanceAbsenceNotes,
-    customPortalConfig: raw.customPortalConfig || baseDefaults.customPortalConfig,
+    customPortalConfig: raw?.customPortalConfig
+      ? {
+          menuTitle: String(raw.customPortalConfig.menuTitle || baseDefaults.customPortalConfig.menuTitle),
+          menuSubtitle: String(raw.customPortalConfig.menuSubtitle || baseDefaults.customPortalConfig.menuSubtitle),
+          enabledForSupervisor: raw.customPortalConfig.enabledForSupervisor !== false,
+          enabledForStudent: raw.customPortalConfig.enabledForStudent !== false,
+          enableStartupPopup: raw.customPortalConfig.enableStartupPopup !== false,
+          popupFrequency: raw.customPortalConfig.popupFrequency || 'every_open',
+          items: Array.isArray(raw.customPortalConfig.items) ? raw.customPortalConfig.items : [],
+        }
+      : baseDefaults.customPortalConfig,
     supervisorMenus: {
       schedule: raw.supervisorMenus?.schedule !== undefined ? raw.supervisorMenus.schedule !== false : baseDefaults.supervisorMenus.schedule,
       exams: raw.supervisorMenus?.exams !== undefined ? raw.supervisorMenus.exams !== false : baseDefaults.supervisorMenus.exams,
@@ -782,6 +800,19 @@ export const getBundledPublicData = () => {
   };
 };
 
+export const cleanDataForFirestore = (obj: any): any => {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(cleanDataForFirestore).filter((v: any) => v !== undefined);
+  const res: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      res[k] = cleanDataForFirestore(v);
+    }
+  }
+  return res;
+};
+
 let hasAttemptedRemixSeed = false;
 
 /**
@@ -794,7 +825,7 @@ export const seedBundledDataToFirestoreIfEmpty = async (dbInstance: any): Promis
 
   try {
     const appSnap = await getDoc(doc(dbInstance, 'settings', 'app'));
-    const defaults = sanitizeAppSettingsWithDefaults();
+    const defaults = cleanDataForFirestore(sanitizeAppSettingsWithDefaults());
     if (appSnap.exists()) {
       const existing = appSnap.data() as any;
       const needsHeal =
@@ -802,7 +833,7 @@ export const seedBundledDataToFirestoreIfEmpty = async (dbInstance: any): Promis
         existing?.title === 'SISTEM UJIAN SEKOLAH' ||
         existing?.loginSubtitle === 'PENILAIAN AKADEMIK BERBASIS KOMPUTER';
       if (needsHeal) {
-        const healed = sanitizeAppSettingsWithDefaults(existing);
+        const healed = cleanDataForFirestore(sanitizeAppSettingsWithDefaults(existing));
         await setDoc(doc(dbInstance, 'settings', 'app'), healed, { merge: true }).catch(() => {});
       }
       return;
