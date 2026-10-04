@@ -57,7 +57,8 @@ import {
   FileSpreadsheet,
   Database,
   Cloud,
-  CloudDownload
+  CloudDownload,
+  Globe
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -1296,16 +1297,27 @@ export default function Dashboard() {
   });
   const [examToken, setExamToken] = useState('');
   const [selectedExamForToken, setSelectedExamForToken] = useState('');
+  const [customManualTokenInput, setCustomManualTokenInput] = useState('');
+  const [showManualTokenToggle, setShowManualTokenToggle] = useState(false);
 
-  // Clear displayed token if the selected exam is locked by Admin
+  // Clear or auto-populate displayed token when selected exam changes
   useEffect(() => {
     if (selectedExamForToken) {
       const selected = exams.find(e => e.id === selectedExamForToken);
-      if (selected && (!selected.isTokenReleased || selected.adminLocked)) {
-        setExamToken('');
+      if (selected) {
+        if (!selected.isTokenReleased || selected.adminLocked) {
+          setExamToken('');
+        } else {
+          const existingToken = tokens.find(t => t.examId === selectedExamForToken) || 
+                                studentTokens.find(t => t.examId === selectedExamForToken);
+          const foundCode = existingToken?.code || selected.activeToken || selected.adminToken || '';
+          if (foundCode && !examToken) {
+            setExamToken(foundCode);
+          }
+        }
       }
     }
-  }, [selectedExamForToken, exams]);
+  }, [selectedExamForToken, exams, tokens, studentTokens]);
 
   // Auto redirect to 'home' if the current tab is not allowed for the active role (including simulated role)
   useEffect(() => {
@@ -3225,6 +3237,9 @@ export default function Dashboard() {
 
     const combinedTokens = mergeTokenListsWithUsage(tokens, studentTokens);
     return combinedTokens.filter((t: any) => {
+      // Token dari Admin yang berlaku untuk Semua Ruang selalu terlihat oleh semua pengawas
+      if (t.isGlobalForAllWindows || t.creatorRuang === 'Semua Ruang' || t.createdBy === 'admin') return true;
+
       if (simEmail) {
         if (t.creatorEmail && t.creatorEmail.toLowerCase().trim() === simEmail) return true;
         const matchingUser = users.find(u => u.email?.toLowerCase().trim() === simEmail);
@@ -9396,19 +9411,34 @@ export default function Dashboard() {
       }
     }
 
-    // Gunakan Smart Cryptographic Token 6 Karakter yang tetap bisa diverifikasi 100% tanpa database!
-    const code = generateSmartExamToken(exam);
+    // Periksa apakah Pengawas / Admin mengetik token manual atau ingin token acak pintar
+    const cleanManualInput = (customManualTokenInput || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    let code = '';
+    let isManual = false;
+
+    if (cleanManualInput) {
+      if (cleanManualInput.length < 3 || cleanManualInput.length > 12) {
+        showToast('Karakter token manual minimal 3 dan maksimal 12 karakter alfanumerik.', 'error');
+        return;
+      }
+      code = cleanManualInput;
+      isManual = true;
+    } else {
+      code = generateSmartExamToken(exam);
+    }
+
     const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 3);
+    expiresAt.setHours(expiresAt.getHours() + 4);
     const tokenDocId = `tok_${code}_${Date.now().toString(36)}`;
 
+    const isGlobalAdminToken = Boolean(isAdmin);
     const simUser = (rolePreviewMode === 'pengawas' && simulatedSupervisorEmail)
       ? users.find(u => u.email?.toLowerCase().trim() === simulatedSupervisorEmail.toLowerCase().trim())
       : null;
-    const effectiveUid = simUser?.id || simUser?.uid || user?.uid || userProfile?.uid || userProfile?.id || auth.currentUser?.uid || 'admin';
-    const effectiveName = simUser?.username || userProfile?.username || userProfile?.name || user?.displayName || auth.currentUser?.displayName || 'Pengawas';
+    const effectiveUid = isGlobalAdminToken ? 'admin' : (simUser?.id || simUser?.uid || user?.uid || userProfile?.uid || userProfile?.id || auth.currentUser?.uid || 'pengawas');
+    const effectiveName = isGlobalAdminToken ? 'Admin Sekolah (Semua Ruang)' : (simUser?.username || userProfile?.username || userProfile?.name || user?.displayName || auth.currentUser?.displayName || 'Pengawas');
     const effectiveEmail = simUser?.email || user?.email || userProfile?.email || auth.currentUser?.email || '';
-    const effectiveRuang = simUser?.ruang || userProfile?.ruang || '';
+    const effectiveRuang = isGlobalAdminToken ? 'Semua Ruang' : (simUser?.ruang || userProfile?.ruang || 'Ruang Pengawas');
 
     const newTokenData = {
       code,
@@ -9420,7 +9450,9 @@ export default function Dashboard() {
       creatorName: effectiveName,
       creatorEmail: effectiveEmail,
       creatorRuang: effectiveRuang,
-      isSmartToken: true,
+      isSmartToken: !isManual,
+      isManualToken: isManual,
+      isGlobalForAllWindows: isGlobalAdminToken,
       usedBy: [],
       usedByDetails: []
     };
@@ -9431,6 +9463,22 @@ export default function Dashboard() {
       expiresAt: expiresAt.getTime(),
       createdAt: new Date().toISOString()
     };
+
+    // Update status Ujian lokal agar mencatat token aktif & token admin
+    const updatedExamObj = {
+      ...exam,
+      activeToken: code,
+      adminToken: isGlobalAdminToken ? code : (exam.adminToken || code),
+      manualToken: isManual ? code : (exam.manualToken || ''),
+      isTokenReleased: true,
+      adminLocked: false,
+      tokenStatusUpdatedAtMs: Date.now(),
+    };
+    saveCreatedExamLocally(updatedExamObj);
+    setExams(prev => prev.map(e => (e.id === updatedExamObj.id ? updatedExamObj : e)));
+
+    // Kosongkan kolom input token manual
+    setCustomManualTokenInput('');
 
     // 1. LANGSUNG tampilkan & simpan di memori lokal serta BroadcastChannel dalam 0ms (Anti-Gagal meski Firebase mati!)
     setTokens(prev => {
@@ -9448,6 +9496,8 @@ export default function Dashboard() {
       createdBy: effectiveUid,
       creatorName: effectiveName,
       creatorRuang: effectiveRuang,
+      isGlobalForAllWindows: isGlobalAdminToken,
+      isManualToken: isManual,
       expiresAt: expiresAt.getTime(),
     };
 
@@ -9469,7 +9519,27 @@ export default function Dashboard() {
       }
     } catch (e) {}
 
-    showToast(`Token ujian ${code} berhasil dirilis! (Smart Token Aktif Online & Offline Tanpa Database)`, 'success');
+    showToast(
+      isGlobalAdminToken
+        ? `Token "${code}" (${isManual ? 'Manual' : 'Acak'}) berhasil dirilis Admin untuk SEMUA RUANG!`
+        : `Token ujian "${code}" (${isManual ? 'Manual' : 'Smart Acak'}) berhasil dirilis!`,
+      'success'
+    );
+
+    // Sinkronisasi data Ujian & Token ke Firestore di latar belakang
+    try {
+      withFirestoreTimeout(
+        setDoc(doc(db, 'exams', exam.id), {
+          activeToken: code,
+          adminToken: isGlobalAdminToken ? code : (exam.adminToken || code),
+          manualToken: isManual ? code : (exam.manualToken || ''),
+          isTokenReleased: true,
+          adminLocked: false,
+          tokenStatusUpdatedAtMs: Date.now()
+        }, { merge: true }),
+        2500
+      ).catch(() => {});
+    } catch (e) {}
 
     // 2. Sinkronisasi ke Firebase Firestore di latar belakang dengan proteksi timeout (tidak pernah membuat layar macet)
     try {
@@ -10960,6 +11030,34 @@ export default function Dashboard() {
             usedBy: existingUsedLocal?.usedBy || [],
             usedByDetails: existingUsedLocal?.usedByDetails || []
           };
+        }
+
+        // Cek apakah token cocok dengan token manual / token aktif ujian (termasuk Token Admin untuk Semua Ruang)
+        if (!tokenData && !confirmedExamId) {
+          const manualMatchedExam = workingExamsList.find(e => 
+            (e.activeToken && String(e.activeToken).trim().toUpperCase() === codeToUse) ||
+            (e.adminToken && String(e.adminToken).trim().toUpperCase() === codeToUse) ||
+            (e.manualToken && String(e.manualToken).trim().toUpperCase() === codeToUse)
+          );
+          if (manualMatchedExam) {
+            isOfflineOrQuotaFallback = true;
+            tokenDocId = `manual_tok_${codeToUse}`;
+            const isFromAdmin = manualMatchedExam.adminToken === codeToUse;
+            tokenData = {
+              id: tokenDocId,
+              code: codeToUse,
+              examId: manualMatchedExam.id,
+              examTitle: manualMatchedExam.title || 'Ujian Sekolah',
+              creatorName: isFromAdmin ? 'Admin Sekolah (Semua Ruang)' : 'Pengawas Ruang',
+              creatorRuang: isFromAdmin ? 'Semua Ruang' : (studentRoom || 'Ruang Ujian'),
+              expiresAt: Date.now() + 4 * 3600 * 1000,
+              isSmartToken: false,
+              isManualToken: true,
+              isGlobalForAllWindows: isFromAdmin,
+              usedBy: existingUsedLocal?.usedBy || [],
+              usedByDetails: existingUsedLocal?.usedByDetails || []
+            };
+          }
         }
       }
 
@@ -13362,13 +13460,18 @@ export default function Dashboard() {
                           const myUid = rolePreviewMode === 'siswa' ? effectiveStudentUid : (user?.uid || userProfile?.uid || userProfile?.id || auth.currentUser?.uid || 'siswa');
                           const myName = rolePreviewMode === 'siswa' ? effectiveStudentName : (userProfile?.username || userProfile?.name || user?.displayName || 'Siswa');
 
-                          if (clean.length >= 5) {
+                          if (clean.length >= 3) {
                             const matchedLocal =
                               tokens.find((t: any) => String(t.code || '').toUpperCase() === clean) ||
                               studentTokens.find((t: any) => String(t.code || '').toUpperCase() === clean);
-                            const matchedSmart = verifySmartExamTokenOffline(clean, exams);
-                            const matchedExamId = matchedLocal?.examId || matchedSmart?.id;
-                            const matchedExamTitle = matchedLocal?.examTitle || matchedSmart?.title;
+                            const matchedSmart = clean.length >= 5 ? verifySmartExamTokenOffline(clean, exams) : null;
+                            const matchedExamByField = exams.find((e: any) => 
+                              (e.activeToken && String(e.activeToken).toUpperCase() === clean) ||
+                              (e.adminToken && String(e.adminToken).toUpperCase() === clean) ||
+                              (e.manualToken && String(e.manualToken).toUpperCase() === clean)
+                            );
+                            const matchedExamId = matchedLocal?.examId || matchedSmart?.id || matchedExamByField?.id;
+                            const matchedExamTitle = matchedLocal?.examTitle || matchedSmart?.title || matchedExamByField?.title;
 
                             const activeViol = violations.find((v: any) =>
                               !v.isReset &&
@@ -13649,40 +13752,32 @@ export default function Dashboard() {
 
                 {/* Pengawas Priority #1 (Paling Atas): Generate / Rilis Token Ujian */}
                 {(isPengawas || isAdmin) && (
-                  <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm space-y-4">
-                    <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className="bg-blue-100 p-2 rounded-xl text-blue-600">
-                          <Key size={24} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <h2 className="text-lg font-bold text-gray-800">Rilis &amp; Generate Token Ujian</h2>
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
-                              ⚡ Smart Token (Tetap Aktif Walau Tanpa Database)
-                            </span>
-                          </div>
-                          <p className="text-xs text-gray-500">Buat token ujian pintar yang otomatis dikenali perangkat siswa meski jaringan/database bermasalah</p>
-                        </div>
+                  <div className="bg-white p-5 sm:p-6 rounded-3xl border border-gray-200 shadow-sm space-y-3.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="bg-blue-100 p-2 rounded-xl text-blue-600">
+                        <Key size={18} />
                       </div>
+                      <h2 className="text-base font-bold text-gray-800">Generate Token Ujian</h2>
                     </div>
                     
-                    <div className="flex flex-col sm:flex-row gap-3 items-end">
-                      <div className="flex-1 w-full">
+                    <div className="space-y-3">
+                      {/* PILIH UJIAN */}
+                      <div className="w-full">
                         <div className="flex items-center justify-between mb-1 ml-1">
-                          <label className="block text-[10px] font-bold text-gray-400 uppercase">Pilih Ujian</label>
+                          <label className="text-xs font-bold text-gray-600 uppercase">
+                            Pilih Ujian
+                          </label>
                           <button
                             type="button"
                             onClick={() => handlePullAllMasterData(false)}
-                            className="text-[10px] font-extrabold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
-                            title="Tarik status izin rilis token terbaru dari Admin"
+                            className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
                           >
                             <RefreshCw size={11} className={isPullingMasterData ? 'animate-spin' : ''} />
-                            <span>Segarkan Status Izin</span>
+                            <span>Segarkan</span>
                           </button>
                         </div>
                         <select 
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+                          className="w-full p-3 bg-gray-50 border border-gray-300 focus:border-blue-600 focus:bg-white rounded-xl outline-none text-sm font-bold text-gray-800"
                           value={selectedExamForToken}
                           onChange={(e) => setSelectedExamForToken(e.target.value)}
                         >
@@ -13699,83 +13794,112 @@ export default function Dashboard() {
                               return (
                                 <option key={e.id} value={e.id}>
                                   {isAllowed ? '🟢 ' : '🔒 '}
-                                  {e.title}{' '}
-                                  {isAllowed
-                                    ? '(Diizinkan Admin - Siap Generate)'
-                                    : '(Menunggu Izin Admin)'}
+                                  {e.title}
                                 </option>
                               );
                             })}
                         </select>
                       </div>
-                      <button 
-                        onClick={handleGenerateToken}
-                        className="w-full sm:w-auto bg-gray-900 text-white font-bold px-8 py-3 rounded-2xl hover:bg-black transition-all active:scale-95 shadow-lg shadow-gray-200 cursor-pointer"
-                      >
-                        Generate Token
-                      </button>
+
+                      {/* TOMBOL GENERATE TOKEN */}
+                      <div>
+                        <button 
+                          onClick={handleGenerateToken}
+                          className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm py-3 px-6 rounded-xl shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        >
+                          <Zap size={16} className="fill-amber-300 text-amber-300" />
+                          <span>
+                            {customManualTokenInput.trim() 
+                              ? `Rilis Token (${customManualTokenInput.trim()})`
+                              : 'Generate Token'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* OPSI KETIK MANUAL KUSTOM (MINIMALIS & TERSEMBUNYI) */}
+                      <div className="pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowManualTokenToggle(!showManualTokenToggle)}
+                          className="text-xs text-gray-400 hover:text-gray-600 font-medium cursor-pointer"
+                        >
+                          {showManualTokenToggle ? '▲ Sembunyikan' : '⚙️ Ketik manual?'}
+                        </button>
+                        {showManualTokenToggle && (
+                          <div className="mt-2 flex gap-2">
+                            <input
+                              type="text"
+                              placeholder="Ketik token (opsional)..."
+                              value={customManualTokenInput}
+                              onChange={(e) => setCustomManualTokenInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                              maxLength={12}
+                              className="flex-1 p-2 bg-gray-50 border border-gray-300 rounded-xl outline-none text-xs font-mono uppercase font-bold text-gray-800"
+                            />
+                            {customManualTokenInput && (
+                              <button
+                                type="button"
+                                onClick={() => setCustomManualTokenInput('')}
+                                className="px-2 text-xs text-red-500 font-bold hover:underline cursor-pointer"
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {(() => {
                       const currExam = exams.find(e => e.id === selectedExamForToken);
                       if (currExam && (!currExam.isTokenReleased || currExam.adminLocked)) {
                         return (
-                          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-700 animate-in fade-in">
-                            <div className="flex items-center gap-3">
-                              <div className="bg-red-100 p-2.5 rounded-xl text-red-600 shrink-0">
-                                <Lock size={20} />
-                              </div>
-                              <div>
-                                <p className="font-bold text-xs uppercase tracking-wider">Token Sedang Dikunci oleh Admin</p>
-                                <p className="text-xs text-red-600 mt-0.5">
-                                  {isAdmin
-                                    ? 'Klik tombol "Izinkan Rilis Token" di samping atau langsung klik "Generate Token" untuk membuka kunci sekaligus membuat token.'
-                                    : 'Admin belum membuka izin rilis token untuk ujian ini. Jika Admin baru saja membuka izin, klik "Segarkan Status Izin" atau langsung klik "Generate Token".'}
-                                </p>
-                              </div>
+                          <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-red-700">
+                            <div className="flex items-center gap-2">
+                              <Lock size={16} className="shrink-0 text-red-600" />
+                              <p className="text-xs font-bold">Token dikunci Admin</p>
                             </div>
                             {isAdmin && (
                               <button
                                 type="button"
                                 onClick={() => handleToggleTokenRelease(currExam.id, false)}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-extrabold shrink-0 cursor-pointer shadow-xs"
+                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shrink-0 cursor-pointer shadow-xs"
                               >
-                                🔓 Izinkan Rilis Token
+                                🔓 Buka Kunci
                               </button>
                             )}
                           </div>
                         );
                       }
                       if (examToken && currExam?.isTokenReleased && !currExam?.adminLocked) {
+                        const isAllRooms = currExam.adminToken === examToken || isAdmin;
                         return (
-                          <div className="mt-4 p-5 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl text-white shadow-xl shadow-blue-100 animate-in fade-in slide-in-from-top-4 duration-300 space-y-2">
-                            <div className="flex items-center justify-between flex-wrap gap-2">
-                              <div className="flex items-center gap-2">
-                                <p className="text-[10px] font-extrabold uppercase tracking-widest opacity-90">Token Ujian Aktif ({currExam.title})</p>
-                                <span className="text-[10px] bg-emerald-400/25 border border-emerald-300/40 text-emerald-100 px-2 py-0.5 rounded-full font-bold">
-                                  ✓ Terverifikasi Online &amp; Offline
+                          <div className="mt-4 p-5 bg-gradient-to-br from-blue-700 via-indigo-800 to-slate-900 rounded-2xl text-white shadow-xl border border-blue-400/30 animate-in fade-in space-y-3">
+                            <div className="flex items-center justify-between text-xs border-b border-white/10 pb-2">
+                              <span className="font-bold text-blue-100">{currExam.title}</span>
+                              <span className="bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full font-bold text-[10px]">
+                                {isAllRooms ? 'Semua Ruang' : (userProfile?.ruang || 'Aktif')}
+                              </span>
+                            </div>
+
+                            <div className="text-center py-1">
+                              <div className="my-2 py-3 px-4 bg-black/40 rounded-xl border border-white/10 flex items-center justify-center">
+                                <span className="text-5xl sm:text-6xl font-mono font-black tracking-[0.25em] text-white select-all">
+                                  {examToken}
                                 </span>
                               </div>
-                              <span className="text-[10px] bg-white/20 px-2.5 py-1 rounded-lg font-bold">Berlaku 3 Jam</span>
                             </div>
-                            <div className="flex items-center justify-between pt-1">
-                              <p className="text-4xl font-mono font-extrabold tracking-[0.22em]">{examToken}</p>
-                              <button 
-                                type="button"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(examToken);
-                                  showToast(`Token ${examToken} berhasil disalin!`, 'info');
-                                }}
-                                className="px-3.5 py-2 bg-white/15 hover:bg-white/25 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer"
-                                title="Salin Kode Token"
-                              >
-                                <Copy size={16} />
-                                <span>Salin Token</span>
-                              </button>
-                            </div>
-                            <p className="text-[11px] text-blue-100 pt-1">
-                              💡 Bagikan 6 karakter token ini kepada siswa di kelas. Token memiliki segel kriptografi ujian sehingga siswa tetap dapat masuk meskipun koneksi database Firebase sedang gangguan.
-                            </p>
+
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(examToken);
+                                showToast(`Token ${examToken} berhasil disalin!`, 'info');
+                              }}
+                              className="w-full py-2.5 bg-white hover:bg-blue-50 text-blue-950 rounded-xl transition-all flex items-center justify-center gap-2 text-xs font-black shadow-md cursor-pointer active:scale-95"
+                            >
+                              <Copy size={15} />
+                              <span>Salin Token</span>
+                            </button>
                           </div>
                         );
                       }
@@ -16080,29 +16204,36 @@ export default function Dashboard() {
 
             {/* Token Generator Section */}
             {(isAdmin || isPengawas) && (
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <Key size={18} className="text-blue-600" /> Generate Token Ujian / <span className="text-gray-400 font-normal">Generate Exam Token</span>
-                </h3>
-                <div className="flex gap-4 items-end">
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-xs font-bold text-gray-500 uppercase">Pilih Ujian / <span className="lowercase">Select Exam</span></label>
+              <div className="bg-white p-5 sm:p-6 rounded-2xl border border-gray-200 shadow-sm space-y-3.5">
+                <div className="flex items-center gap-2">
+                  <div className="bg-blue-100 p-1.5 rounded-lg text-blue-600">
+                    <Key size={18} />
+                  </div>
+                  <h3 className="font-bold text-gray-800 text-sm">Generate Token Ujian</h3>
+                </div>
+
+                <div className="space-y-3">
+                  {/* PILIH UJIAN */}
+                  <div className="w-full">
+                    <div className="flex items-center justify-between mb-1 ml-1">
+                      <label className="text-xs font-bold text-gray-600 uppercase">
+                        Pilih Ujian
+                      </label>
                       <button
                         type="button"
                         onClick={() => handlePullAllMasterData(false)}
-                        className="text-[10px] font-extrabold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                        className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
                       >
                         <RefreshCw size={11} className={isPullingMasterData ? 'animate-spin' : ''} />
-                        <span>Segarkan Status Izin</span>
+                        <span>Segarkan</span>
                       </button>
                     </div>
                     <select 
-                      className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full p-3 bg-gray-50 border border-gray-300 focus:border-blue-600 focus:bg-white rounded-xl outline-none text-sm font-bold text-gray-800"
                       value={selectedExamForToken}
                       onChange={(e) => setSelectedExamForToken(e.target.value)}
                     >
-                      <option value="">-- Pilih Ujian / Select Exam --</option>
+                      <option value="">-- Pilih Ujian --</option>
                       {[...activeUnarchivedExams]
                         .sort((a, b) => {
                           const aReady = a.isTokenReleased && !a.adminLocked ? 1 : 0;
@@ -16114,57 +16245,111 @@ export default function Dashboard() {
                           return (
                             <option key={e.id} value={e.id}>
                               {isAllowed ? '🟢 ' : '🔒 '}
-                              {e.title} {isAllowed ? '(Diizinkan Admin)' : '(Terkunci Admin)'}
+                              {e.title}
                             </option>
                           );
                         })}
                     </select>
                   </div>
-                  <button 
-                    onClick={handleGenerateToken}
-                    className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-2 rounded-lg font-medium h-[42px] cursor-pointer"
-                  >
-                    Generate
-                  </button>
+
+                  {/* TOMBOL GENERATE */}
+                  <div>
+                    <button 
+                      onClick={handleGenerateToken}
+                      className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-bold text-sm py-3 px-6 rounded-xl shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Zap size={16} className="fill-amber-300 text-amber-300" />
+                      <span>
+                        {customManualTokenInput.trim() 
+                          ? `Rilis Token (${customManualTokenInput.trim()})`
+                          : 'Generate Token'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* OPSI KETIK MANUAL */}
+                  <div className="pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualTokenToggle(!showManualTokenToggle)}
+                      className="text-xs text-gray-400 hover:text-gray-600 font-medium cursor-pointer"
+                    >
+                      {showManualTokenToggle ? '▲ Sembunyikan' : '⚙️ Ketik manual?'}
+                    </button>
+                    {showManualTokenToggle && (
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Ketik token (opsional)..."
+                          value={customManualTokenInput}
+                          onChange={(e) => setCustomManualTokenInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                          maxLength={12}
+                          className="flex-1 p-2 bg-gray-50 border border-gray-300 rounded-xl outline-none text-xs font-mono uppercase font-bold text-gray-800"
+                        />
+                        {customManualTokenInput && (
+                          <button
+                            type="button"
+                            onClick={() => setCustomManualTokenInput('')}
+                            className="px-2 text-xs text-red-500 font-bold hover:underline cursor-pointer"
+                          >
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {(() => {
                   const currExam = activeUnarchivedExams.find(e => e.id === selectedExamForToken);
                   if (currExam && (!currExam.isTokenReleased || currExam.adminLocked)) {
                     return (
-                      <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-red-700 animate-in fade-in">
-                        <div className="flex items-center gap-3">
-                          <div className="bg-red-100 p-2.5 rounded-xl text-red-600 shrink-0">
-                            <Lock size={20} />
-                          </div>
-                          <div>
-                            <p className="font-bold text-xs uppercase tracking-wider">Token Sedang Dikunci oleh Admin</p>
-                            <p className="text-xs text-red-600 mt-0.5">
-                              {isAdmin
-                                ? 'Klik tombol "Izinkan Rilis Token" di samping untuk membuka izin bagi Pengawas & Siswa.'
-                                : 'Admin belum mengizinkan rilis token untuk ujian ini. Klik "Segarkan Status Izin" atau "Generate" jika Admin baru saja membuka izin.'}
-                            </p>
-                          </div>
+                      <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-red-700">
+                        <div className="flex items-center gap-2">
+                          <Lock size={16} className="shrink-0 text-red-600" />
+                          <p className="text-xs font-bold">Token dikunci Admin</p>
                         </div>
                         {isAdmin && (
                           <button
                             type="button"
                             onClick={() => handleToggleTokenRelease(currExam.id, false)}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-extrabold shrink-0 cursor-pointer shadow-xs"
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shrink-0 cursor-pointer shadow-xs"
                           >
-                            🔓 Izinkan Rilis Token
+                            🔓 Buka Kunci
                           </button>
                         )}
                       </div>
                     );
                   }
                   if (examToken && currExam?.isTokenReleased && !currExam?.adminLocked) {
+                    const isAllRooms = currExam.adminToken === examToken || isAdmin;
                     return (
-                      <div className="mt-4 p-4 bg-blue-50 border border-blue-100 rounded-xl flex items-center justify-between">
-                        <div>
-                          <p className="text-xs text-blue-600 font-bold uppercase">Token Anda / <span className="lowercase">Your Token</span>:</p>
-                          <p className="text-2xl font-mono font-bold text-blue-800 tracking-widest">{examToken}</p>
+                      <div className="mt-4 p-5 bg-gradient-to-br from-blue-700 via-indigo-800 to-slate-900 rounded-2xl text-white shadow-xl border border-blue-400/30 animate-in fade-in space-y-3">
+                        <div className="flex items-center justify-between text-xs border-b border-white/10 pb-2">
+                          <span className="font-bold text-blue-100">{currExam.title}</span>
+                          <span className="bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full font-bold text-[10px]">
+                            {isAllRooms ? 'Semua Ruang' : (userProfile?.ruang || 'Aktif')}
+                          </span>
                         </div>
-                        <p className="text-xs text-blue-500 italic">Berlaku selama 2 jam / <span className="lowercase">Valid for 2 hours</span></p>
+
+                        <div className="text-center py-1">
+                          <div className="my-2 py-3 px-4 bg-black/40 rounded-xl border border-white/10 flex items-center justify-center">
+                            <span className="text-5xl sm:text-6xl font-mono font-black tracking-[0.25em] text-white select-all">
+                              {examToken}
+                            </span>
+                          </div>
+                        </div>
+
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(examToken);
+                            showToast(`Token ${examToken} berhasil disalin!`, 'info');
+                          }}
+                          className="w-full py-2.5 bg-white hover:bg-blue-50 text-blue-950 rounded-xl transition-all flex items-center justify-center gap-2 text-xs font-black shadow-md cursor-pointer active:scale-95"
+                        >
+                          <Copy size={15} />
+                          <span>Salin Token</span>
+                        </button>
                       </div>
                     );
                   }
