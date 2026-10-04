@@ -13317,9 +13317,6 @@ export default function Dashboard() {
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
                             <h2 className="text-xl font-bold">Ikuti Ujian / <span className="text-blue-200">Take Exam</span></h2>
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-400/25 text-emerald-100 border border-emerald-300/30">
-                              ⚡ Smart Token Anti-Macet
-                            </span>
                           </div>
                           <p className="text-sm opacity-80">Masukkan token dari pengawas lalu klik Kirim / Mulai, atau tekan Segarkan jika belum terdeteksi</p>
                         </div>
@@ -13397,11 +13394,7 @@ export default function Dashboard() {
                               );
                             }
                           }
-                          return (
-                            <p className="mt-1.5 text-[11px] text-center text-white/70 font-medium">
-                              Otomatis huruf besar &bull; Mendukung Verifikasi Mandiri Tanpa Database (Smart Token)
-                            </p>
-                          );
+                          return null;
                         })()}
                       </div>
                       <button 
@@ -13423,11 +13416,7 @@ export default function Dashboard() {
                       </button>
                     </div>
 
-                    <div className="mt-3 pt-3 border-t border-white/15 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
-                      <span className="text-white/80 flex items-center gap-1.5">
-                        <CheckCircle2 size={13} className="text-emerald-300 shrink-0" />
-                        <span>Mode Data HP Mandiri Aktif: Token divalidasi offline matematis tanpa memakan kuota server.</span>
-                      </span>
+                    <div className="mt-2.5 flex items-center justify-end text-xs">
                       <button
                         type="button"
                         onClick={() => {
@@ -13437,11 +13426,10 @@ export default function Dashboard() {
                           setEmergencyPinError('');
                           setShowEmergencySupervisorModal(true);
                         }}
-                        className="text-amber-200 hover:text-amber-100 font-bold underline flex items-center gap-1.5 cursor-pointer transition-colors shrink-0"
-                        title="Buka ujian melalui otorisasi PIN Pengawas jika token bermasalah atau kuota Firebase habis"
+                        className="text-white/60 hover:text-white font-medium underline flex items-center gap-1.5 cursor-pointer transition-colors"
                       >
-                        <ShieldAlert size={14} className="text-amber-300" />
-                        <span>Bantuan Pengawas / Masuk Darurat</span>
+                        <Shield size={13} />
+                        <span>Bantuan Pengawas</span>
                       </button>
                     </div>
 
@@ -24703,18 +24691,18 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Modal Bantuan Pengawas / Masuk Ujian Darurat (Saat Kuota Firebase Habis atau Tanpa Jaringan Pusat) */}
+      {/* Modal Bantuan Pengawas / Masuk Ujian Darurat */}
       {showEmergencySupervisorModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[99996] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-amber-300 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
-            <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 text-white px-6 py-5 flex items-center justify-between">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-gray-200 overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white px-6 py-5 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
-                  <ShieldAlert size={22} className="text-white" />
+                  <Key size={20} className="text-white" />
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold">Otorisasi Pengawas Ruang</h3>
-                  <p className="text-xs text-amber-100">Bypass Masuk Ujian Darurat (Mode Kuota Habis / Data Seluler)</p>
+                  <h3 className="text-base font-extrabold">Otorisasi Pengawas</h3>
+                  <p className="text-xs text-blue-100">Verifikasi pengawas ruang ujian</p>
                 </div>
               </div>
               <button
@@ -24727,21 +24715,14 @@ export default function Dashboard() {
             </div>
 
             <div className="p-6 space-y-4">
-              <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs leading-relaxed flex items-start gap-2.5">
-                <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <strong>Untuk Pengawas Ruang:</strong> Siswa menggunakan paket data HP masing-masing. Jika token tidak dapat divalidasi karena kuota server habis atau sinyal bermasalah, Pengawas dapat mengizinkan siswa langsung masuk dengan memasukkan <strong>PIN Pengawas Ruang</strong>.
-                </div>
-              </div>
-
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                  1. Pilih Mata Pelajaran / Soal Ujian:
+                  Mata Pelajaran / Soal Ujian:
                 </label>
                 <select
                   value={emergencySelectedExamId}
                   onChange={(e) => setEmergencySelectedExamId(e.target.value)}
-                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">-- Pilih Soal Ujian --</option>
                   {exams.filter(e => !e.isArchived).map(ex => (
@@ -24754,21 +24735,19 @@ export default function Dashboard() {
 
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                  2. Masukkan PIN Pengawas / Admin:
+                  PIN Pengawas:
                 </label>
                 <input
                   type="password"
-                  placeholder="Ketik PIN Pengawas (cth: 2026 atau password guru)"
+                  placeholder="Masukkan PIN"
                   value={emergencyPin}
                   onChange={(e) => setEmergencyPin(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') handleEmergencySupervisorAuthorize();
                   }}
-                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl text-sm font-mono text-gray-900 outline-none focus:ring-2 focus:ring-amber-500"
+                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl text-sm font-mono text-gray-900 outline-none focus:ring-2 focus:ring-blue-500"
+                  autoComplete="off"
                 />
-                <p className="mt-1 text-[11px] text-gray-400">
-                  Default PIN Master Sekolah: <strong className="text-gray-600">2026</strong> atau password akun pengawas Anda.
-                </p>
               </div>
 
               {emergencyPinError && (
@@ -24791,7 +24770,7 @@ export default function Dashboard() {
                 type="button"
                 onClick={handleEmergencySupervisorAuthorize}
                 disabled={isStartingExam}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white font-extrabold text-xs shadow-md shadow-orange-100 flex items-center gap-2 transition-all cursor-pointer disabled:opacity-60"
+                className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow-md shadow-blue-100 flex items-center gap-2 transition-all cursor-pointer disabled:opacity-60"
               >
                 {isStartingExam ? (
                   <>
